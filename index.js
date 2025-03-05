@@ -99,6 +99,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // 初始化验证码
     resetPuzzle();
 
+    // 获取GitHub star count
+    fetchGitHubStarCount();
+
     /**
      * 创建必要的DOM元素
      */
@@ -904,5 +907,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 }, 1000 / PERFORMANCE_CONFIG.animationFrameRate);
             }
         }
+    }
+
+    // 获取GitHub star count
+    function fetchGitHubStarCount() {
+        fetch('https://api.github.com/repos/kexinoh/Curve-Puzzle-CAPTCHA')
+            .then(response => response.json())
+            .then(data => {
+                const starCountElement = document.getElementById('star-count');
+                starCountElement.textContent = `Stars: ${data.stargazers_count}`;
+            })
+            .catch(error => {
+                console.error('Error fetching star count:', error);
+            });
     }
 });
