@@ -1,8 +1,8 @@
-# 曲线拼图验证码 - 静态演示版 / Curve Puzzle CAPTCHA - Static Demo Version
+# Curve Puzzle CAPTCHA - Static Demo Version / 曲线拼图验证码 - 静态演示版
 
-[中文](#中文) | [English](#english)
+[English](#english) | [中文](#中文)
 
-**访问链接 / Access Link:** [https://kexinoh.github.io/Curve-Puzzle-CAPTCHA/](https://kexinoh.github.io/Curve-Puzzle-CAPTCHA/)
+**Access Link / 访问链接:** [https://kexinoh.github.io/Curve-Puzzle-CAPTCHA/](https://kexinoh.github.io/Curve-Puzzle-CAPTCHA/)
 
 ## English
 
@@ -17,6 +17,12 @@ This is a purely front-end implemented curve puzzle CAPTCHA, designed to provide
 - Performance optimization for low-performance devices
 - Optional display of curves and control points
 - Uses color backgrounds to avoid network image loading issues
+
+### Why It's Hard for Machines to Crack
+
+• **Continuous Operation**: Requires the AI to persistently recognize the slider.  
+• **Abnormal Interruption**: Continuous recognition introduces a certain delay at each position, thereby distinguishing humans from AI.  
+• **Increased Complexity**: Further escalates the recognition cost required by the AI.
 
 ### Usage
 
@@ -35,10 +41,19 @@ Contributions are welcome! Please submit a Pull Request or Issue to help improve
 
 ### License
 
-This project is licensed under the MIT License. 
+This project is licensed under the MIT License.
+
+### References
+
+```bibtex
+@misc{curvepuzzlecaptcha,
+title={Curve Puzzle CAPTCHA},
+howpublished={\url{https://github.com/kexinoh/Curve-Puzzle-CAPTCHA}},
+note={Accessed: 2023-10-15}
+}
+```
 
 
----
 ## 中文
 
 ### 项目简介
@@ -52,6 +67,13 @@ This project is licensed under the MIT License.
 - 支持低性能设备的性能优化
 - 提供可选的曲线和控制点显示
 - 使用颜色背景，避免网络图片加载问题
+
+### 为什么机器难以破解
+
+- **持续操作**：需要AI持续对滑块进行识别。
+- **异常中断**：持续识别会导致每一个位置出现一定的延迟，从而可以区分出人类与AI。
+- **增大复杂度**: 可以进一步的消耗AI所需花费的识别成本。
+
 
 ### 使用方法
 
