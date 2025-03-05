@@ -2,6 +2,7 @@
 
 [中文](#中文) | [English](#english)
 
+**访问链接 / Access Link:** [https://kexinoh.github.io/Curve-Puzzle-CAPTCHA/](https://kexinoh.github.io/Curve-Puzzle-CAPTCHA/)
 
 ## English
 
@@ -36,8 +37,8 @@ Contributions are welcome! Please submit a Pull Request or Issue to help improve
 
 This project is licensed under the MIT License. 
 
----
 
+---
 ## 中文
 
 ### 项目简介
@@ -70,5 +71,3 @@ This project is licensed under the MIT License.
 ### 许可证
 
 本项目采用MIT许可证。
-
-
