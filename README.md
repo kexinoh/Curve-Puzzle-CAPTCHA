@@ -1,5 +1,9 @@
 # Curve Puzzle CAPTCHA - Static Demo Version / 曲线拼图验证码 - 静态演示版
 
+
+### **Next CAPTCHA: Curve-Puzzle-CAPTCHA**
+
+
 [English](#english) | [中文](#中文)
 
 **Access Link / 访问链接:** [https://kexinoh.github.io/Curve-Puzzle-CAPTCHA/](https://kexinoh.github.io/Curve-Puzzle-CAPTCHA/)
