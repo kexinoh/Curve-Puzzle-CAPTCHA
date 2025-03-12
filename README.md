@@ -12,11 +12,10 @@
 
 ### Project Overview
 
-This is a purely front-end implemented curve puzzle CAPTCHA, designed to provide a CAPTCHA solution without backend dependencies. Users need to complete the puzzle by dragging the slider to verify their identity.
+This is a purely front-end implemented curve puzzle CAPTCHA, Users need to complete the puzzle by dragging the slider to verify their identity.
 
 ### Features
 
-- Pure front-end implementation, no backend support required
 - Uses Canvas to draw puzzles and curves
 - Performance optimization for low-performance devices
 - Optional display of curves and control points
@@ -62,11 +61,10 @@ note={Accessed: 2023-10-15}
 
 ### 项目简介
 
-这是一个纯前端实现的曲线拼图验证码，旨在提供一种无需后端依赖的验证码解决方案。用户需要通过拖动滑块来完成拼图，以验证其身份。
+这是一个纯前端实现的曲线拼图验证码用于展示。用户需要通过拖动滑块来完成拼图，以验证其身份。
 
 ### 功能特性
 
-- 纯前端实现，无需后端支持
 - 使用Canvas绘制拼图和曲线
 - 支持低性能设备的性能优化
 - 提供可选的曲线和控制点显示
