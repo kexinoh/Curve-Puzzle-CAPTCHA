@@ -20,7 +20,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 性能优化配置
     const PERFORMANCE_CONFIG = {
-        throttleDelay: 16,         // 约60fps的更新频率
         animationFrameRate: 60,    // 动画帧率限制
         useLowQualityMode: false   // 低质量模式标志
     };
@@ -35,7 +34,6 @@ document.addEventListener('DOMContentLoaded', () => {
         number: null,
         centerX: null,
         centerY: null,
-        imgData: null,
         isMatch: false,
         moveX: 0,
         dragStartX: 0,
@@ -48,8 +46,19 @@ document.addEventListener('DOMContentLoaded', () => {
         showCurveAndPoints: false // 是否显示曲线和控制点
     };
 
-    // 缓存一些频繁使用的元素和上下文
-    let lastRenderTime = 0;
+    // 拖动时只在浏览器绘制帧中处理最新坐标，避免事件堆积。
+    let dragFrameId = null;
+    let pendingPointerX = null;
+    let activePointerId = null;
+    let curveCanvas = null;
+    let curveAnimationFrameId = null;
+    let curveLastPaintTime = 0;
+    const dragMetrics = {
+        trackLeft: 0,
+        areaWidth: PUZZLE_CONFIG.canvasWidth,
+        maxX: PUZZLE_CONFIG.canvasWidth - PUZZLE_CONFIG.size,
+        grabOffsetX: 0
+    };
 
     // 确保DOM结构正确
     initializeDom();
@@ -149,10 +158,10 @@ document.addEventListener('DOMContentLoaded', () => {
             toggleSwitch.addEventListener('change', function() {
                 puzzleState.showCurveAndPoints = this.checked;
 
-                // 更新曲线和点的显示状态
-                const curveCanvas = document.getElementById('curve_path');
-                if (curveCanvas) {
-                    curveCanvas.style.display = this.checked ? 'block' : 'none';
+                if (this.checked) {
+                    drawCurvePath();
+                } else {
+                    removeCurvePath();
                 }
             });
 
@@ -178,62 +187,48 @@ document.addEventListener('DOMContentLoaded', () => {
         if (duration > 50) {
             console.log("检测到低性能设备，启用性能优化...");
             PERFORMANCE_CONFIG.useLowQualityMode = true;
-            PERFORMANCE_CONFIG.throttleDelay = 20;
             PERFORMANCE_CONFIG.animationFrameRate = 15;
             PUZZLE_CONFIG.curve.resolution = 50;
         }
     }
 
     /**
-     * 节流函数
-     */
-    function throttle(func, delay) {
-        let lastCall = 0;
-        return function(...args) {
-            const now = Date.now();
-            if (now - lastCall >= delay) {
-                lastCall = now;
-                return func.apply(this, args);
-            }
-        };
-    }
-
-    /**
      * 设置事件监听
      */
     function setupEvents() {
-        // 创建一次性的节流函数
-        const throttledDragMove = throttle(handleDragMove, PERFORMANCE_CONFIG.throttleDelay);
-
-        // 鼠标事件
-        $dragBtn.addEventListener('mousedown', handleDragStart);
-        $dragArea.addEventListener('mousemove', throttledDragMove);
-        document.addEventListener('mouseup', handleDragEnd);
-
-        // 触摸事件 - 使用同一个节流函数
-        $dragBtn.addEventListener('touchstart', function(e) {
-            e.preventDefault();
-            handleDragStart(e.touches[0]);
-        });
-
-        $dragArea.addEventListener('touchmove', function(e) {
-            e.preventDefault();
-            throttledDragMove(e.touches[0]);
-        });
-
-        document.addEventListener('touchend', handleDragEnd);
+        // Pointer Events 同时覆盖鼠标、触控笔和触摸，并可在指针离开轨道后继续捕获。
+        $dragBtn.addEventListener('pointerdown', handleDragStart);
+        document.addEventListener('pointermove', handleDragMove);
+        document.addEventListener('pointerup', handleDragEnd);
+        document.addEventListener('pointercancel', handleDragEnd);
     }
 
     /**
      * 处理拖动开始
      */
     function handleDragStart(e) {
-        console.log('拖动开始');
-        if (puzzleState.isMatch) return;
+        if (puzzleState.isMatch || (e.pointerType === 'mouse' && e.button !== 0)) return;
+
+        e.preventDefault();
+
+        const btnRect = $dragBtn.getBoundingClientRect();
+
+        dragMetrics.trackLeft = btnRect.left - puzzleState.moveX;
+        dragMetrics.areaWidth = $dragArea.clientWidth;
+        dragMetrics.maxX = Math.max(0, dragMetrics.areaWidth - btnRect.width);
+        dragMetrics.grabOffsetX = e.clientX - btnRect.left;
 
         puzzleState.isDragging = true;
-        puzzleState.dragStartX = $dragBtn.getBoundingClientRect().left;
-        puzzleState.dragEndX = puzzleState.dragStartX + PUZZLE_CONFIG.canvasWidth - PUZZLE_CONFIG.size;
+        puzzleState.dragStartX = 0;
+        puzzleState.dragEndX = dragMetrics.maxX;
+        activePointerId = e.pointerId;
+        pendingPointerX = null;
+
+        if ($dragBtn.setPointerCapture) {
+            $dragBtn.setPointerCapture(e.pointerId);
+        }
+
+        $dragBtn.classList.add('is-dragging');
         $dragBtn.textContent = '<->';
     }
 
@@ -241,40 +236,71 @@ document.addEventListener('DOMContentLoaded', () => {
      * 处理拖动移动
      */
     function handleDragMove(e) {
-        if (!puzzleState.isDragging) return;
+        if (!puzzleState.isDragging || e.pointerId !== activePointerId) return;
 
-        const x = e.clientX || e.pageX;
-        const btnRect = $dragBtn.getBoundingClientRect();
-        const areaRect = $dragArea.getBoundingClientRect();
+        e.preventDefault();
+        pendingPointerX = e.clientX;
 
-        // 计算相对于拖动区域的位置
-        const relativeX = x - areaRect.left;
-
-        // 限制在有效范围内
-        if (relativeX >= 0 && relativeX <= areaRect.width - btnRect.width) {
-            puzzleState.moveX = relativeX;
-
-            // 使用transform替代left属性，提高性能
-            $dragBtn.style.transform = `translateX(${puzzleState.moveX}px)`;
-            $moved.style.width = puzzleState.moveX + 'px';
-
-            // 使用节流控制更新频率
-            const now = performance.now();
-            if (now - lastRenderTime >= 1000 / PERFORMANCE_CONFIG.animationFrameRate) {
-                lastRenderTime = now;
-                updatePuzzlePiece();
-            }
+        if (dragFrameId === null) {
+            dragFrameId = requestAnimationFrame(renderPendingDrag);
         }
+    }
+
+    /**
+     * 在下一绘制帧中消费最新的指针坐标。
+     */
+    function renderPendingDrag() {
+        dragFrameId = null;
+        if (pendingPointerX === null || !puzzleState.isDragging) return;
+
+        const pointerX = pendingPointerX;
+        pendingPointerX = null;
+        applyDragPosition(pointerX);
+    }
+
+    /**
+     * 同步滑块、进度条和拼图块的位置。
+     */
+    function applyDragPosition(pointerX) {
+        const relativeX = Math.max(
+            0,
+            Math.min(pointerX - dragMetrics.trackLeft - dragMetrics.grabOffsetX, dragMetrics.maxX)
+        );
+
+        puzzleState.moveX = relativeX;
+
+        // transform 不触发布局；进度条使用 scaleX，避免逐帧修改 width。
+        $dragBtn.style.transform = `translate3d(${relativeX}px, 0, 0)`;
+        $moved.style.transform = `scaleX(${relativeX / dragMetrics.areaWidth})`;
+        updatePuzzlePiece();
     }
 
     /**
      * 处理拖动结束
      */
-    function handleDragEnd() {
-        if (!puzzleState.isDragging) return;
+    function handleDragEnd(e) {
+        if (!puzzleState.isDragging || e.pointerId !== activePointerId) return;
+
+        // 松手可能发生在下一帧之前，先应用最后收到的坐标再进行判定。
+        if (dragFrameId !== null) {
+            cancelAnimationFrame(dragFrameId);
+            dragFrameId = null;
+        }
+        if (pendingPointerX !== null) {
+            applyDragPosition(pendingPointerX);
+            pendingPointerX = null;
+        } else if (Number.isFinite(e.clientX)) {
+            applyDragPosition(e.clientX);
+        }
 
         puzzleState.isDragging = false;
+        $dragBtn.classList.remove('is-dragging');
         $dragBtn.textContent = '|||';
+
+        if ($dragBtn.hasPointerCapture && $dragBtn.hasPointerCapture(e.pointerId)) {
+            $dragBtn.releasePointerCapture(e.pointerId);
+        }
+        activePointerId = null;
 
         const position = getPositionOnCurve(puzzleState.moveX);
         const isXMatch = Math.abs(position.x - puzzleState.targetX) <= 5;
@@ -296,13 +322,13 @@ document.addEventListener('DOMContentLoaded', () => {
             $dragText.style.color = '#e74c3c';
 
             // 震动效果
-            const original = parseInt($dragBtn.style.left) || 0;
+            const original = puzzleState.moveX;
             const steps = [10, -20, 15, -10, 5, 0];
             let i = 0;
 
             const shake = () => {
                 if (i < steps.length) {
-                    $dragBtn.style.left = (original + steps[i]) + 'px';
+                    $dragBtn.style.transform = `translate3d(${original + steps[i]}px, 0, 0)`;
                     i++;
                     setTimeout(shake, 50);
                 } else {
@@ -351,8 +377,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // 重置滑块位置
-        $dragBtn.style.left = '0px';
-        $moved.style.width = '0px';
+        $dragBtn.style.transform = 'translate3d(0, 0, 0)';
+        $moved.style.transform = 'scaleX(0)';
         $dragText.textContent = '拖动滑块进行验证';
         $dragText.style.color = '';
 
@@ -429,20 +455,8 @@ document.addEventListener('DOMContentLoaded', () => {
         ctx.img.stroke();  // 先描边
         ctx.img.clip();    // 然后剪切
 
-        // 直接获取拼图区域的图像数据 - 与index.js保持一致
-        puzzleState.imgData = ctx.img.getImageData(
-            puzzleState.targetX,
-            puzzleState.targetY - PUZZLE_CONFIG.radius,
-            PUZZLE_CONFIG.size + PUZZLE_CONFIG.radius + 1,
-            PUZZLE_CONFIG.size + 2*PUZZLE_CONFIG.radius + 1
-        );
-
-        console.log('图像数据获取成功:',
-            puzzleState.targetX,
-            puzzleState.targetY - PUZZLE_CONFIG.radius,
-            PUZZLE_CONFIG.size + PUZZLE_CONFIG.radius + 1,
-            PUZZLE_CONFIG.size + 2*PUZZLE_CONFIG.radius + 1
-        );
+        // 从背景画布直接生成拼图位图，不读取像素，兼容 file:// 等受限来源。
+        preparePuzzlePiece();
 
         // 使目标拼图区域可见
         ctx.img.fillStyle = 'rgba(255, 255, 255, 0.6)';
@@ -506,10 +520,8 @@ document.addEventListener('DOMContentLoaded', () => {
      * 清理所有Canvas和状态
      */
     function cleanupCanvases() {
-        // 清理曲线路径Canvas
-        if (document.getElementById('curve_path')) {
-            document.getElementById('curve_path').remove();
-        }
+        // 停止辅助线动画并清理其Canvas
+        removeCurvePath();
 
         // 清理目标轮廓Canvas
         if (document.getElementById('target_outline')) {
@@ -524,9 +536,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // 重置状态
         puzzleState.isMatch = false;
+        puzzleState.isDragging = false;
         puzzleState.moveX = 0;
-        if ($dragBtn) $dragBtn.style.left = '0px';
-        if ($moved) $moved.style.width = '0px';
+        puzzleState.offscreenReady = false;
+
+        if (dragFrameId !== null) {
+            cancelAnimationFrame(dragFrameId);
+            dragFrameId = null;
+        }
+        pendingPointerX = null;
+        activePointerId = null;
+
+        if ($dragBtn) {
+            $dragBtn.classList.remove('is-dragging');
+            $dragBtn.style.transform = 'translate3d(0, 0, 0)';
+        }
+        if ($moved) $moved.style.transform = 'scaleX(0)';
         if ($dragText) $dragText.textContent = '拖动滑块进行验证';
     }
 
@@ -568,12 +593,65 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     /**
+     * 一轮验证码只生成一次拼图位图，拖动时直接复用。
+     */
+    function preparePuzzlePiece() {
+        if (!Number.isFinite(puzzleState.targetX) || !Number.isFinite(puzzleState.targetY)) {
+            puzzleState.offscreenReady = false;
+            return;
+        }
+
+        if (!puzzleState.offscreenCanvas) {
+            puzzleState.offscreenCanvas = document.createElement('canvas');
+            puzzleState.offscreenCanvas.width = PUZZLE_CONFIG.size*2;
+            puzzleState.offscreenCanvas.height = PUZZLE_CONFIG.size*2;
+            puzzleState.offscreenCtx = puzzleState.offscreenCanvas.getContext('2d');
+        }
+
+        const offCtx = puzzleState.offscreenCtx;
+        offCtx.globalCompositeOperation = "source-over";
+        offCtx.clearRect(0, 0, puzzleState.offscreenCanvas.width, puzzleState.offscreenCanvas.height);
+
+        // 先裁剪形状，再从背景Canvas复制对应区域；全程不调用getImageData。
+        offCtx.save();
+        offCtx.beginPath();
+
+        const offsetX = PUZZLE_CONFIG.radius; // 偏移量确保拼图在Canvas中心
+        const offsetY = PUZZLE_CONFIG.radius;
+        drawPuzzleShape(offCtx, offsetX, puzzleState.number, offsetY);
+
+        offCtx.closePath();
+        offCtx.clip();
+        offCtx.drawImage(
+            canvas.img,
+            offsetX - puzzleState.targetX,
+            offsetY - puzzleState.targetY
+        );
+        offCtx.restore();
+
+        // 添加拼图描边
+        offCtx.beginPath();
+        drawPuzzleShape(offCtx, offsetX, puzzleState.number, offsetY);
+        offCtx.closePath();
+        offCtx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+        offCtx.lineWidth = 2;
+        offCtx.stroke();
+
+        puzzleState.offscreenReady = true;
+    }
+
+    /**
      * 更新拼图块位置
      */
     function updatePuzzlePiece() {
-        if (!ctx.overlay || !puzzleState.imgData) {
+        if (!ctx.overlay) {
             console.error('缺少必要的拼图数据');
             return;
+        }
+
+        if (!puzzleState.offscreenReady) {
+            preparePuzzlePiece();
+            if (!puzzleState.offscreenReady) return;
         }
 
         // 清除上一帧
@@ -583,51 +661,14 @@ document.addEventListener('DOMContentLoaded', () => {
         const position = getPositionOnCurve(puzzleState.moveX);
 
         // 在曲线路径上标记当前位置
-        if (document.getElementById('curve_path')) {
-            const pathCtx = document.getElementById('curve_path').getContext('2d');
+        const pathCanvas = document.getElementById('curve_path');
+        if (pathCanvas) {
+            const pathCtx = pathCanvas.getContext('2d');
             pathCtx.beginPath();
             pathCtx.arc(position.x, position.y, 3, 0, Math.PI * 2);
             pathCtx.fillStyle = 'rgba(255, 255, 0, 0.8)';
             pathCtx.fill();
         }
-
-        // 使用离屏Canvas预渲染拼图块，减少闪烁
-        if (!puzzleState.offscreenCanvas) {
-            puzzleState.offscreenCanvas = document.createElement('canvas');
-            puzzleState.offscreenCanvas.width = PUZZLE_CONFIG.size*2;
-            puzzleState.offscreenCanvas.height = PUZZLE_CONFIG.size*2;
-            puzzleState.offscreenCtx = puzzleState.offscreenCanvas.getContext('2d');
-        }
-
-        const offCtx = puzzleState.offscreenCtx;
-        offCtx.clearRect(0, 0, puzzleState.offscreenCanvas.width, puzzleState.offscreenCanvas.height);
-
-        // 绘制拼图到离屏Canvas
-        offCtx.putImageData(puzzleState.imgData, 0, 0);
-
-        // 创建拼图形状路径（用于剪切）
-        offCtx.globalCompositeOperation = "destination-in";
-        offCtx.save();
-        offCtx.beginPath();
-
-        // 使用正确的参数 - 这里是关键，需要使用固定的起点位置
-        const offsetX = PUZZLE_CONFIG.radius; // 偏移量确保拼图在Canvas中心
-        const offsetY = PUZZLE_CONFIG.radius;
-        drawPuzzleShape(offCtx, offsetX, puzzleState.number, offsetY);
-
-        offCtx.closePath();
-        offCtx.fill();
-        offCtx.clip();
-        offCtx.restore();
-
-        // 恢复默认合成模式，添加描边
-        offCtx.globalCompositeOperation = "source-over";
-        offCtx.beginPath();
-        drawPuzzleShape(offCtx, offsetX, puzzleState.number, offsetY);
-        offCtx.closePath();
-        offCtx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
-        offCtx.lineWidth = 2;
-        offCtx.stroke();
 
         // 将离屏Canvas绘制到实际Canvas上的正确位置
         ctx.overlay.save();
@@ -644,8 +685,6 @@ document.addEventListener('DOMContentLoaded', () => {
         );
 
         ctx.overlay.restore();
-
-        console.log('拼图块已更新:', position.x, position.y);
     }
 
     /**
@@ -749,9 +788,22 @@ document.addEventListener('DOMContentLoaded', () => {
         // 避免选择最开始和最末尾的点
         const minIndex = Math.floor(curve.points.length * 0.2);
         const maxIndex = Math.floor(curve.points.length * 0.8);
-        const randomIndex = minIndex + Math.floor(Math.random() * (maxIndex - minIndex));
+        const maxTargetX = PUZZLE_CONFIG.canvasWidth - PUZZLE_CONFIG.size - PUZZLE_CONFIG.radius;
+        const maxTargetY = PUZZLE_CONFIG.canvasHeight - PUZZLE_CONFIG.size;
+        const isFullyVisible = point =>
+            point.x >= 0 &&
+            point.x <= maxTargetX &&
+            point.y >= PUZZLE_CONFIG.radius &&
+            point.y <= maxTargetY;
 
-        return curve.points[randomIndex];
+        let candidates = curve.points.slice(minIndex, maxIndex).filter(isFullyVisible);
+
+        // 正常情况下中段一定有可用点；回退仍只选择曲线上的点，保证验证可达。
+        if (candidates.length === 0) {
+            candidates = curve.points.slice(0, maxIndex).filter(isFullyVisible);
+        }
+
+        return candidates[Math.floor(Math.random() * candidates.length)] || curve.points[0];
     }
 
     /**
@@ -784,21 +836,8 @@ document.addEventListener('DOMContentLoaded', () => {
      * 绘制曲线路径
      */
     function drawCurvePath() {
-        console.log('绘制曲线路径...');
-
-        // 如果配置为不显示曲线和点，则直接返回
-        if (puzzleState.showCurveAndPoints === false) {
-            // 清理已有的曲线Canvas
-            if (document.getElementById('curve_path')) {
-                document.getElementById('curve_path').remove();
-            }
-            return;
-        }
-
-        // 清理旧的曲线Canvas
-        if (document.getElementById('curve_path')) {
-            document.getElementById('curve_path').remove();
-        }
+        removeCurvePath();
+        if (!puzzleState.showCurveAndPoints || !puzzleState.curvePath) return;
 
         // 创建路径Canvas
         const pathCanvas = document.createElement('canvas');
@@ -818,20 +857,57 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         container.appendChild(pathCanvas);
+        curveCanvas = pathCanvas;
 
         // 绘制静态部分
-        drawStaticCurveParts();
+        const pathCtx = pathCanvas.getContext('2d');
+        if (!pathCtx) {
+            removeCurvePath();
+            return;
+        }
+        drawStaticCurveParts(pathCtx);
 
         // 开始动画
-        animateTargetPoint();
+        puzzleState.targetAnim = 0;
+        curveLastPaintTime = 0;
+        curveAnimationFrameId = requestAnimationFrame(animateTargetPoint);
     }
+
+    /**
+     * 停止辅助线动画。
+     */
+    function stopCurveAnimation() {
+        if (curveAnimationFrameId !== null) {
+            cancelAnimationFrame(curveAnimationFrameId);
+            curveAnimationFrameId = null;
+        }
+        curveLastPaintTime = 0;
+    }
+
+    /**
+     * 停止动画并移除辅助线Canvas。
+     */
+    function removeCurvePath() {
+        stopCurveAnimation();
+
+        const currentCanvas = curveCanvas;
+        curveCanvas = null;
+        if (currentCanvas && currentCanvas.isConnected) {
+            currentCanvas.remove();
+        }
+
+        const staleCanvas = document.getElementById('curve_path');
+        if (staleCanvas && staleCanvas !== currentCanvas) {
+            staleCanvas.remove();
+        }
+    }
+
     /**
      * 绘制静态曲线部分
      */
-    function drawStaticCurveParts() {
+    function drawStaticCurveParts(pathCtx) {
         if (!puzzleState.curvePath) return;
 
-        const pathCtx = document.getElementById('curve_path').getContext('2d');
         const points = puzzleState.curvePath.points;
         const controlPoints = puzzleState.curvePath.controlPoints;
 
@@ -873,39 +949,52 @@ document.addEventListener('DOMContentLoaded', () => {
     /**
      * 动画目标点
      */
-    function animateTargetPoint() {
-        const pathCtx = document.getElementById('curve_path').getContext('2d');
+    function animateTargetPoint(timestamp) {
+        curveAnimationFrameId = null;
 
-        // 清除目标点区域
-        const animSize = 12;
-        pathCtx.clearRect(
-            puzzleState.targetX - animSize,
-            puzzleState.targetY - animSize,
-            animSize * 2,
-            animSize * 2
-        );
+        const currentCanvas = curveCanvas;
+        if (
+            !puzzleState.showCurveAndPoints ||
+            puzzleState.isMatch ||
+            !currentCanvas ||
+            !currentCanvas.isConnected
+        ) {
+            return;
+        }
 
-        // 绘制脉动效果
-        puzzleState.targetAnim = (puzzleState.targetAnim || 0) + 0.05;
-        const pulseSize = 5 + Math.sin(puzzleState.targetAnim) * 2;
+        const pathCtx = currentCanvas.getContext('2d');
+        if (!pathCtx) return;
 
-        pathCtx.beginPath();
-        pathCtx.arc(puzzleState.targetX, puzzleState.targetY, pulseSize, 0, Math.PI * 2);
-        pathCtx.fillStyle = 'rgba(255, 255, 255, 0.5)';
-        pathCtx.fill();
+        const frameInterval = 1000 / PERFORMANCE_CONFIG.animationFrameRate;
+        if (!curveLastPaintTime || timestamp - curveLastPaintTime >= frameInterval) {
+            curveLastPaintTime = timestamp;
 
-        // 循环动画
-        if (!puzzleState.isMatch) {
-            // 限制帧率
-            if (!puzzleState.lastAnimTime ||
-                performance.now() - puzzleState.lastAnimTime > (1000 / PERFORMANCE_CONFIG.animationFrameRate)) {
-                puzzleState.lastAnimTime = performance.now();
-                requestAnimationFrame(animateTargetPoint);
-            } else {
-                setTimeout(() => {
-                    requestAnimationFrame(animateTargetPoint);
-                }, 1000 / PERFORMANCE_CONFIG.animationFrameRate);
-            }
+            // 清除目标点区域
+            const animSize = 12;
+            pathCtx.clearRect(
+                puzzleState.targetX - animSize,
+                puzzleState.targetY - animSize,
+                animSize * 2,
+                animSize * 2
+            );
+
+            // 绘制脉动效果
+            puzzleState.targetAnim = (puzzleState.targetAnim || 0) + 0.05;
+            const pulseSize = 5 + Math.sin(puzzleState.targetAnim) * 2;
+
+            pathCtx.beginPath();
+            pathCtx.arc(puzzleState.targetX, puzzleState.targetY, pulseSize, 0, Math.PI * 2);
+            pathCtx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+            pathCtx.fill();
+        }
+
+        if (
+            puzzleState.showCurveAndPoints &&
+            !puzzleState.isMatch &&
+            curveCanvas === currentCanvas &&
+            currentCanvas.isConnected
+        ) {
+            curveAnimationFrameId = requestAnimationFrame(animateTargetPoint);
         }
     }
 
