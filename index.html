@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>拼图滑块验证码</title>
     <link rel="stylesheet" href="index.css">
-    <script src="index.js"></script>
+    <script src="index.js" defer></script>
     <style>
         .github-info {
             text-align: center;
@@ -27,11 +27,14 @@
             <canvas id="yan_ceng" width="400" height="250"></canvas>
             <canvas id="yan_img2" width="400" height="250"></canvas>
         </div>
-        <!--<canvas id="yanCanvas" width="800" height="500"></canvas>-->
         <div class="yan_drag">
             <div class="moved"></div>
             <button class="yan_drag_btn" type="button">|||</button>
             <div class="yan_drag_text">拖动滑块进行验证</div>
+        </div>
+        <div class="curve_toggle_row">
+            <label for="curve_toggle">显示辅助线: </label>
+            <input type="checkbox" id="curve_toggle">
         </div>
     </div>
 </body>
