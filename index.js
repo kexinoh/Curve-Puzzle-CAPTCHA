@@ -13,8 +13,7 @@ document.addEventListener('DOMContentLoaded', () => {
         curve: {
             points: 5,              // 控制点数量
             yMargin: 0.2,          // y轴边距比例（上下各预留20%）
-            resolution: 100,        // 曲线采样点数量
-            lengthMultiplier: 1.5   // 曲线长度与滑块距离的比例
+            resolution: 100         // 曲线采样点数量
         }
     };
 
@@ -270,8 +269,9 @@ document.addEventListener('DOMContentLoaded', () => {
         puzzleState.moveX = relativeX;
 
         // transform 不触发布局；进度条使用 scaleX，避免逐帧修改 width。
+        const progress = dragMetrics.maxX > 0 ? relativeX / dragMetrics.maxX : 0;
         $dragBtn.style.transform = `translate3d(${relativeX}px, 0, 0)`;
-        $moved.style.transform = `scaleX(${relativeX / dragMetrics.areaWidth})`;
+        $moved.style.transform = `scaleX(${progress})`;
         updatePuzzlePiece();
     }
 
@@ -350,17 +350,37 @@ document.addEventListener('DOMContentLoaded', () => {
         // 清理Canvas但保留图像
         cleanupCanvases();
 
-        // 生成曲线路径
-        puzzleState.curvePath = generateSmoothCurvePath();
+        // 生成曲线路径，并确保中段存在完整可见且可达的目标点。
+        let targetPoint = null;
+        for (let attempt = 0; attempt < 20 && !targetPoint; attempt++) {
+            puzzleState.curvePath = generateSmoothCurvePath();
+            targetPoint = selectTargetPoint(puzzleState.curvePath);
+        }
+
+        // 极端随机结果下使用一条确定、安全的曲线兜底。
+        if (!targetPoint) {
+            puzzleState.curvePath = generateSmoothCurvePath([
+                { x: 20, y: 110 },
+                { x: 100, y: 150 },
+                { x: 180, y: 80 },
+                { x: 260, y: 150 },
+                { x: 330, y: 110 }
+            ]);
+            targetPoint = selectTargetPoint(puzzleState.curvePath);
+            if (!targetPoint) {
+                targetPoint = puzzleState.curvePath.points[
+                    Math.floor(puzzleState.curvePath.points.length / 2)
+                ];
+            }
+        }
 
         // 选择目标点
-        const targetPoint = selectTargetPoint(puzzleState.curvePath);
         puzzleState.targetX = targetPoint.x;
         puzzleState.targetY = targetPoint.y;
 
         // 设置拖动区域范围
         puzzleState.dragStartX = 0;
-        puzzleState.dragEndX = PUZZLE_CONFIG.canvasWidth - 50; // 减去滑块宽度
+        puzzleState.dragEndX = Math.max(0, $dragArea.clientWidth - $dragBtn.offsetWidth);
 
         // 随机生成背景 - 使用随机图片或纯色
         puzzleState.currentImageIndex = Math.floor(Math.random() * backgroundColors.length);
@@ -690,10 +710,10 @@ document.addEventListener('DOMContentLoaded', () => {
     /**
      * 生成平滑曲线路径
      */
-    function generateSmoothCurvePath() {
-        const controlPoints = generateControlPoints();
+    function generateSmoothCurvePath(controlPoints = generateControlPoints()) {
         const { resolution } = PUZZLE_CONFIG.curve;
         const points = [];
+        const cumulativeLengths = [];
         let totalLength = 0;
         let lastPoint = null;
 
@@ -716,13 +736,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 const point = { x, y };
 
                 if (i === 0 || j > 0) {
-                    points.push(point);
-
                     if (lastPoint) {
                         const dx = point.x - lastPoint.x;
                         const dy = point.y - lastPoint.y;
                         totalLength += Math.sqrt(dx * dx + dy * dy);
                     }
+
+                    points.push(point);
+                    cumulativeLengths.push(totalLength);
                     lastPoint = point;
                 }
             }
@@ -731,6 +752,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return {
             points,
             totalLength,
+            cumulativeLengths,
             controlPoints
         };
     }
@@ -785,9 +807,18 @@ document.addEventListener('DOMContentLoaded', () => {
      * 在曲线上随机选择目标点
      */
     function selectTargetPoint(curve) {
-        // 避免选择最开始和最末尾的点
-        const minIndex = Math.floor(curve.points.length * 0.2);
-        const maxIndex = Math.floor(curve.points.length * 0.8);
+        if (
+            !curve ||
+            !Array.isArray(curve.points) ||
+            !Array.isArray(curve.cumulativeLengths) ||
+            curve.points.length < 2 ||
+            curve.cumulativeLengths.length !== curve.points.length ||
+            !Number.isFinite(curve.totalLength) ||
+            curve.totalLength <= 0
+        ) {
+            return null;
+        }
+
         const maxTargetX = PUZZLE_CONFIG.canvasWidth - PUZZLE_CONFIG.size - PUZZLE_CONFIG.radius;
         const maxTargetY = PUZZLE_CONFIG.canvasHeight - PUZZLE_CONFIG.size;
         const isFullyVisible = point =>
@@ -796,35 +827,69 @@ document.addEventListener('DOMContentLoaded', () => {
             point.y >= PUZZLE_CONFIG.radius &&
             point.y <= maxTargetY;
 
-        let candidates = curve.points.slice(minIndex, maxIndex).filter(isFullyVisible);
+        const candidates = curve.points.filter((point, index) => {
+            const progress = curve.cumulativeLengths[index] / curve.totalLength;
+            return progress >= 0.2 && progress <= 0.8 && isFullyVisible(point);
+        });
 
-        // 正常情况下中段一定有可用点；回退仍只选择曲线上的点，保证验证可达。
-        if (candidates.length === 0) {
-            candidates = curve.points.slice(0, maxIndex).filter(isFullyVisible);
-        }
-
-        return candidates[Math.floor(Math.random() * candidates.length)] || curve.points[0];
+        return candidates.length > 0
+            ? candidates[Math.floor(Math.random() * candidates.length)]
+            : null;
     }
 
     /**
      * 获取曲线上的位置
      */
     function getPositionOnCurve(moveX) {
-        if (!puzzleState.curvePath) return { x: moveX, y: PUZZLE_CONFIG.canvasHeight / 2 };
+        if (
+            !puzzleState.curvePath ||
+            !Array.isArray(puzzleState.curvePath.points) ||
+            !Array.isArray(puzzleState.curvePath.cumulativeLengths) ||
+            puzzleState.curvePath.points.length < 2 ||
+            puzzleState.curvePath.cumulativeLengths.length !== puzzleState.curvePath.points.length ||
+            !Number.isFinite(puzzleState.curvePath.totalLength) ||
+            puzzleState.curvePath.totalLength <= 0
+        ) {
+            return {
+                x: Number.isFinite(moveX) ? moveX : 0,
+                y: PUZZLE_CONFIG.canvasHeight / 2
+            };
+        }
 
-        // 计算进度
-        const progress = (moveX / (puzzleState.dragEndX - puzzleState.dragStartX))
-            * PUZZLE_CONFIG.curve.lengthMultiplier;
+        const { points, cumulativeLengths, totalLength } = puzzleState.curvePath;
+        const dragDistance = puzzleState.dragEndX - puzzleState.dragStartX;
+        const progress = dragDistance > 0
+            ? Math.max(
+                0,
+                Math.min(((Number.isFinite(moveX) ? moveX : 0) - puzzleState.dragStartX) / dragDistance, 1)
+            )
+            : 0;
 
-        // 找到对应点
-        const targetIndex = Math.min(
-            Math.floor(progress * (puzzleState.curvePath.points.length - 1)),
-            puzzleState.curvePath.points.length - 2
-        );
+        if (progress === 0 || totalLength === 0) return points[0];
+        if (progress === 1) return points[points.length - 1];
 
-        const currentPoint = puzzleState.curvePath.points[targetIndex];
-        const nextPoint = puzzleState.curvePath.points[targetIndex + 1];
-        const t = (progress * (puzzleState.curvePath.points.length - 1)) % 1;
+        // 按实际曲线长度查找所在区段，使拼图在整个滑块行程内匀速移动。
+        const targetLength = progress * totalLength;
+        let low = 1;
+        let high = cumulativeLengths.length - 1;
+
+        while (low < high) {
+            const mid = Math.floor((low + high) / 2);
+            if (cumulativeLengths[mid] < targetLength) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+
+        const nextIndex = low;
+        const currentIndex = nextIndex - 1;
+        const segmentStart = cumulativeLengths[currentIndex];
+        const segmentLength = cumulativeLengths[nextIndex] - segmentStart;
+        const rawT = segmentLength > 0 ? (targetLength - segmentStart) / segmentLength : 0;
+        const t = Math.max(0, Math.min(rawT, 1));
+        const currentPoint = points[currentIndex];
+        const nextPoint = points[nextIndex];
 
         return {
             x: currentPoint.x + (nextPoint.x - currentPoint.x) * t,
